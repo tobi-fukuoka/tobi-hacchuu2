@@ -1,6 +1,6 @@
 /* 東美発注 v1 — iPadオフライン発注アプリ */
 'use strict';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const DB_NAME = 'tobi-hacchu2';
 const DEPTS = ['画材', '額縁・木枠・キャンバス・金具'];
 const ROWS_PER_SHEET = 30;
@@ -391,9 +391,6 @@ function openPrintView(o) {
   $('#pv-print').textContent = USE_PDF ? 'PDF・印刷' : '印刷・PDF'; $('#pv-print').disabled = false;
   $('#sheets').innerHTML = sheetHTML(o);
   $('#pv-title').textContent = `発注書　${o.supplier}　${o.no || '（未確定・確認用）'}　${o.items.length}品目`;
-  const s = S.supMap.get(o.supplier) || {};
-  $('#pv-mail').disabled = !s.email;
-  $('#pv-mail').title = s.email ? '' : 'この仕入先のメールアドレスが未登録です（設定で登録できます）';
   $('#printview').classList.add('on');
   fitSheets();
 }
@@ -851,7 +848,6 @@ function bindUI() {
   $('#btn-confirm').onclick = confirmOrder;
   $('#pv-close').onclick = () => $('#printview').classList.remove('on');
   $('#pv-print').onclick = () => USE_PDF ? sharePDF() : window.print();
-  $('#pv-mail').onclick = () => pvOrder && mailOrder(pvOrder);
   window.addEventListener('resize', () => { if ($('#printview').classList.contains('on')) fitSheets(); });
   $('#modal').addEventListener('click', e => { if (e.target.id === 'modal' && !scanCtl) closeModal(); });
   // 履歴
