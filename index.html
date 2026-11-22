@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="東美発注">
 <meta name="theme-color" content="#1f3a5f">
 <link rel="manifest" href="manifest.json">
@@ -23,7 +24,7 @@ input,select,textarea{font:inherit;border:1px solid var(--line);border-radius:8p
 textarea{width:100%;min-height:60px}
 label{font-size:13px;color:var(--sub)}
 .app{display:flex;flex-direction:column;height:100%}
-header{background:var(--head);color:#fff;padding:calc(env(safe-area-inset-top) + 6px) 12px 0}
+header{background:var(--head);color:#fff;padding:calc(env(safe-area-inset-top) + 6px) calc(env(safe-area-inset-right) + 12px) 0 calc(env(safe-area-inset-left) + 12px)}
 .hrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .title{font-weight:700;font-size:17px;margin-right:6px}
 .dept{display:flex;gap:4px}
@@ -96,7 +97,7 @@ table.t th{color:var(--sub);font-weight:500;font-size:13px}
 /* ---- 発注書 ---- */
 #printview{position:fixed;inset:0;background:#6b7380;z-index:60;display:none;flex-direction:column}
 #printview.on{display:flex}
-#printview .pbar{display:flex;gap:8px;padding:10px;background:#2b313b;align-items:center;flex-wrap:wrap}
+#printview .pbar{display:flex;gap:8px;padding:calc(env(safe-area-inset-top) + 10px) 12px 10px;background:#2b313b;align-items:center;flex-wrap:wrap}
 #printview .pbar span{color:#fff;font-size:14px;margin-right:auto}
 #sheets{flex:1;overflow:auto;padding:16px}
 .sheet{width:210mm;height:297mm;background:#fff;color:#000;margin:0 auto 16px;padding:10mm 10mm 8mm;font-family:"Hiragino Mincho ProN","Hiragino Sans","Noto Sans JP",serif;font-size:9.5pt;line-height:1.35;position:relative;overflow:hidden;transform-origin:top center}

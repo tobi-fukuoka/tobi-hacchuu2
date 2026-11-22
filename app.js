@@ -1,6 +1,6 @@
 /* 東美発注 v1 — iPadオフライン発注アプリ */
 'use strict';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const DB_NAME = 'tobi-hacchu2';
 const DEPTS = ['画材', '額縁・木枠・キャンバス・金具'];
 const ROWS_PER_SHEET = 30;
@@ -348,8 +348,47 @@ function sheetHTML(o) {
   return html;
 }
 let pvOrder = null;
+let pvPdf = null; // {order, file}
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const USE_PDF = IS_IOS || new URLSearchParams(location.search).has('pdf');
+function loadScript(src) { return new Promise((res, rej) => { if (document.querySelector(`script[src="${src}"]`)) return res(); const sc = document.createElement('script'); sc.src = src; sc.onload = res; sc.onerror = () => rej(new Error(src + ' を読み込めませんでした')); document.head.appendChild(sc); }); }
+function pdfName(o) { return `発注書_${o.supplier}_${o.no || '未確定'}.pdf`.replace(/[\\/:*?"<>|]/g, '_'); }
+async function buildPDF(o) {
+  await loadScript('html2canvas.min.js'); await loadScript('jspdf.umd.min.js');
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;left:-10000px;top:0;width:210mm;background:#fff';
+  box.innerHTML = sheetHTML(o); document.body.appendChild(box);
+  try {
+    const pdf = new jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+    const sheets = $$('.sheet', box);
+    for (let i = 0; i < sheets.length; i++) {
+      const cv = await html2canvas(sheets[i], { scale: 2.5, backgroundColor: '#ffffff', logging: false });
+      if (i) pdf.addPage();
+      pdf.addImage(cv.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, 210, 297);
+    }
+    return new File([pdf.output('blob')], pdfName(o), { type: 'application/pdf' });
+  } finally { box.remove(); }
+}
+async function sharePDF() {
+  const o = pvOrder; if (!o) return;
+  const btn = $('#pv-print');
+  if (!pvPdf || pvPdf.order !== o) {
+    btn.disabled = true; btn.textContent = 'PDFを作成中…';
+    try { pvPdf = { order: o, file: await buildPDF(o) }; }
+    catch (e) { toast('PDFを作れませんでした：' + (e.message || e), 4000); btn.disabled = false; btn.textContent = 'PDF・印刷'; return; }
+    btn.disabled = false; btn.textContent = 'PDFを共有（印刷・メール）';
+  }
+  const f = pvPdf.file;
+  if (navigator.canShare && navigator.canShare({ files: [f] })) {
+    try { await navigator.share({ files: [f], title: f.name }); }
+    catch (e) { if (e.name === 'NotAllowedError') toast('PDFができました。もう一度ボタンを押してください', 3500); }
+  } else {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  }
+}
 function openPrintView(o) {
-  pvOrder = o;
+  pvOrder = o; pvPdf = null;
+  $('#pv-print').textContent = USE_PDF ? 'PDF・印刷' : '印刷・PDF'; $('#pv-print').disabled = false;
   $('#sheets').innerHTML = sheetHTML(o);
   $('#pv-title').textContent = `発注書　${o.supplier}　${o.no || '（未確定・確認用）'}　${o.items.length}品目`;
   const s = S.supMap.get(o.supplier) || {};
@@ -811,7 +850,7 @@ function bindUI() {
   $('#btn-preview').onclick = () => { const lines = cartLines(S.supplier); if (!lines.length) { toast('数量が入っている商品がありません'); return; } openPrintView({ supplier: S.supplier, items: lines, staff: $('#staff-sel').value, comm: S.shop.commText, date: today() }); };
   $('#btn-confirm').onclick = confirmOrder;
   $('#pv-close').onclick = () => $('#printview').classList.remove('on');
-  $('#pv-print').onclick = () => window.print();
+  $('#pv-print').onclick = () => USE_PDF ? sharePDF() : window.print();
   $('#pv-mail').onclick = () => pvOrder && mailOrder(pvOrder);
   window.addEventListener('resize', () => { if ($('#printview').classList.contains('on')) fitSheets(); });
   $('#modal').addEventListener('click', e => { if (e.target.id === 'modal' && !scanCtl) closeModal(); });
