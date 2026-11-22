@@ -1,6 +1,6 @@
 /* 東美発注 v1 — iPadオフライン発注アプリ */
 'use strict';
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const DB_NAME = 'tobi-hacchu2';
 const DEPTS = ['画材', '額縁・木枠・キャンバス・金具'];
 const ROWS_PER_SHEET = 30;
@@ -57,6 +57,7 @@ const S = {
   products: [], byId: new Map(), bySup: new Map(), byJan: new Map(),
   suppliers: [], supMap: new Map(), brandRates: [], shop: {}, staff: [],
   carts: new Map(), // supplier -> Map(pid -> {qty, note})
+  cartComm: new Map(), // supplier -> 追加コメント
   orders: [],
   oFiltered: [], oShown: 0, mFiltered: [], mShown: 0,
 };
@@ -108,11 +109,24 @@ function cartTotals(sup) {
   }
   return { cnt, jo, ge, geUnknown, lines };
 }
-const saveCart = debounce(async sup => {
+async function saveCartNow(sup) {
   const c = cartOf(sup);
   const items = [...c].filter(([, v]) => v.qty > 0 || v.note).map(([pid, v]) => ({ pid, qty: v.qty, note: v.note || '' }));
-  if (items.length) await put('carts', { supplier: sup, items, updatedAt: Date.now() }); else await del('carts', sup);
-}, 400);
+  const comm = S.cartComm.get(sup) || '';
+  if (items.length || comm) await put('carts', { supplier: sup, items, comm, updatedAt: Date.now() }); else await del('carts', sup);
+}
+const saveCart = debounce(saveCartNow, 250);
+function commFor(sup) { const extra = (S.cartComm.get(sup) || '').trim(); return [S.shop.commText || '', extra].filter(Boolean).join('\n'); }
+function renderCommBtn() { const b = $('#btn-comm'); if (b) b.textContent = (S.cartComm.get(S.supplier) || '').trim() ? '通信欄 ✎' : '通信欄'; }
+function openCommEditor() {
+  modal(`<h3>通信欄　${esc(S.supplier)}</h3>
+    <div class="field"><label>いつもの文（設定で変更できます）</label><div style="padding:8px 10px;background:#f4f5f7;border-radius:8px;white-space:pre-wrap">${esc(S.shop.commText || '（なし）')}</div></div>
+    <div class="field" style="margin-top:10px"><label>この発注だけの追加コメント</label><textarea id="cm-extra" style="min-height:90px" placeholder="例：至急でお願いします／○日までに納品希望 など">${esc(S.cartComm.get(S.supplier) || '')}</textarea></div>
+    <div class="acts"><button data-x="0">キャンセル</button><button class="primary" data-x="1">保存</button></div>`, el => {
+    $('[data-x="0"]', el).onclick = closeModal;
+    $('[data-x="1"]', el).onclick = () => { S.cartComm.set(S.supplier, $('#cm-extra', el).value); saveCartNow(S.supplier); closeModal(); renderCommBtn(); toast('通信欄を保存しました'); };
+  });
+}
 
 /* ---------- 初期化 ---------- */
 async function boot() {
@@ -127,7 +141,7 @@ async function boot() {
   S.brandRates = await kvGet('brandRates', []);
   S.shop = await kvGet('shop', {});
   S.staff = await kvGet('staff', []);
-  for (const c of carts) S.carts.set(c.supplier, new Map(c.items.map(i => [i.pid, { qty: i.qty, note: i.note }])));
+  for (const c of carts) { S.carts.set(c.supplier, new Map(c.items.map(i => [i.pid, { qty: i.qty, note: i.note }]))); if (c.comm) S.cartComm.set(c.supplier, c.comm); }
   S.orders = orders.sort((a, b) => b.id - a.id);
   S.dept = await kvGet('lastDept', DEPTS[0]);
   bindUI();
@@ -180,7 +194,7 @@ function selectSupplier(name) {
   }
   S.supplier = name;
   kvSet('lastSup:' + S.dept, name);
-  renderChips(); renderSupInfo(); filterOrderList(); renderFooter();
+  renderChips(); renderSupInfo(); filterOrderList(); renderFooter(); renderCommBtn();
 }
 function renderSupInfo() {
   const s = S.supMap.get(S.supplier);
@@ -439,14 +453,15 @@ async function confirmOrder() {
   modal(`<h3>発注確定　${esc(sup)}</h3>
     <div>${lines.length}品目・${t.cnt}点　上代計 ¥${yen(t.jo)}　担当：${esc(staff)}</div>
     ${lotOdd.length ? `<div class="err" style="margin-top:8px">取り寄せ単位の端数があります：<br>${lotOdd.map(l => `・${esc(l.name)}（${l.lot}単位 / ${l.qty}）`).join('<br>')}</div>` : ''}
-    <div class="field" style="margin-top:12px"><label>通信欄</label><textarea id="c-comm">${esc(S.shop.commText || '')}</textarea></div>
+    <div class="field" style="margin-top:12px"><label>通信欄（いつもの文）</label><div style="padding:8px 10px;background:#f4f5f7;border-radius:8px;white-space:pre-wrap">${esc(S.shop.commText || '（なし）')}</div></div>
+    <div class="field" style="margin-top:8px"><label>この発注だけの追加コメント</label><textarea id="c-extra" placeholder="例：至急でお願いします／○日までに納品希望 など">${esc(S.cartComm.get(sup) || '')}</textarea></div>
     <div class="acts"><button data-x="0">戻る</button><button class="primary" data-x="1">確定して発注書を作る</button></div>`, el => {
     $('[data-x="0"]', el).onclick = closeModal;
     $('[data-x="1"]', el).onclick = async () => {
-      const o = { no: await nextOrderNo(), date: today(), createdAt: new Date().toISOString(), supplier: sup, dept: S.supMap.get(sup)?.dept || S.dept, staff, items: lines, comm: $('#c-comm', el).value, shop: { ...S.shop }, totalJodai: t.jo, totalQty: t.cnt };
+      const o = { no: await nextOrderNo(), date: today(), createdAt: new Date().toISOString(), supplier: sup, dept: S.supMap.get(sup)?.dept || S.dept, staff, items: lines, comm: [S.shop.commText || '', $('#c-extra', el).value.trim()].filter(Boolean).join('\n'), shop: { ...S.shop }, totalJodai: t.jo, totalQty: t.cnt };
       o.id = await put('orders', o);
       S.orders.unshift(o);
-      S.carts.set(sup, new Map()); await del('carts', sup);
+      S.carts.set(sup, new Map()); S.cartComm.delete(sup); await del('carts', sup); renderCommBtn();
       closeModal(); filterOrderList(); renderFooter(); renderFreeShip(); renderChips();
       openPrintView(o);
       toast(`発注を確定しました（${o.no}）`);
@@ -842,10 +857,11 @@ function bindUI() {
   });
   $('#olist').addEventListener('dblclick', e => { const row = e.target.closest('.row'); if (row && e.target.closest('.nm')) openProductForm(S.byId.get(+row.dataset.id)); });
   $('#staff-sel').onchange = () => sessionStorage.setItem('staff', $('#staff-sel').value);
-  $('#btn-draft').onclick = async () => { const c = cartOf(S.supplier); await put('carts', { supplier: S.supplier, items: [...c].map(([pid, v]) => ({ pid, ...v })), updatedAt: Date.now() }); toast('下書きを保存しました（このiPadに残ります）'); };
-  $('#btn-clear').onclick = async () => { if (!cartTotals(S.supplier).lines) return; if (await confirmBox(`${S.supplier} の数量をすべて0に戻しますか？`, 'クリア')) { S.carts.set(S.supplier, new Map()); await del('carts', S.supplier); filterOrderList(); renderFooter(); renderFreeShip(); renderChips(); } };
-  $('#btn-preview').onclick = () => { const lines = cartLines(S.supplier); if (!lines.length) { toast('数量が入っている商品がありません'); return; } openPrintView({ supplier: S.supplier, items: lines, staff: $('#staff-sel').value, comm: S.shop.commText, date: today() }); };
+  $('#btn-draft').onclick = async () => { const c = cartOf(S.supplier); await put('carts', { supplier: S.supplier, items: [...c].map(([pid, v]) => ({ pid, ...v })), comm: S.cartComm.get(S.supplier) || '', updatedAt: Date.now() }); toast('下書きを保存しました（このiPadに残ります）'); };
+  $('#btn-clear').onclick = async () => { if (!cartTotals(S.supplier).lines) return; if (await confirmBox(`${S.supplier} の数量をすべて0に戻しますか？`, 'クリア')) { S.carts.set(S.supplier, new Map()); S.cartComm.delete(S.supplier); await del('carts', S.supplier); renderCommBtn(); filterOrderList(); renderFooter(); renderFreeShip(); renderChips(); } };
+  $('#btn-preview').onclick = () => { const lines = cartLines(S.supplier); if (!lines.length) { toast('数量が入っている商品がありません'); return; } openPrintView({ supplier: S.supplier, items: lines, staff: $('#staff-sel').value, comm: commFor(S.supplier), date: today() }); };
   $('#btn-confirm').onclick = confirmOrder;
+  $('#btn-comm').onclick = openCommEditor;
   $('#pv-close').onclick = () => $('#printview').classList.remove('on');
   $('#pv-print').onclick = () => USE_PDF ? sharePDF() : window.print();
   window.addEventListener('resize', () => { if ($('#printview').classList.contains('on')) fitSheets(); });
