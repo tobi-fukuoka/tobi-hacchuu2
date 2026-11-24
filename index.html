@@ -65,6 +65,7 @@ main{flex:1;overflow:hidden;position:relative}
 .b-lot{background:var(--accent-bg);color:var(--accent)}
 .b-warn{background:var(--warn-bg);color:var(--warn)}
 .b-sup{background:#eef0f3;color:var(--sub)}
+.b-ok{background:var(--ok-bg);color:var(--ok)}
 .qty{display:flex;align-items:center;justify-content:flex-end;gap:4px}
 .qty button{width:40px;height:38px;padding:0;font-size:20px}
 .qty input{width:58px;text-align:center;height:38px;padding:4px}
@@ -159,6 +160,7 @@ html.standalone #printview .pbar{padding-top:calc(max(env(safe-area-inset-top), 
         <input type="search" id="q" placeholder="商品名・品番・JANで検索（バーコードリーダー可）" autocomplete="off">
         <button id="btn-scan">バーコード読取</button>
         <label class="chk"><input type="checkbox" id="q-all">全仕入先から探す</label>
+        <label class="chk"><input type="checkbox" id="q-handled">取扱中のみ</label>
         <label class="chk"><input type="checkbox" id="q-cart">発注中のみ</label>
         <button class="small" id="btn-newprod">＋商品を登録</button>
       </div>
@@ -190,6 +192,7 @@ html.standalone #printview .pbar{padding-top:calc(max(env(safe-area-inset-top), 
       <div class="toolbar">
         <select id="m-sup"></select>
         <input type="search" id="m-q" placeholder="商品名・品番・JANで検索">
+        <label class="chk"><input type="checkbox" id="m-handled">取扱中のみ</label>
         <label class="chk"><input type="checkbox" id="m-check">要確認のみ</label>
         <button id="m-add" class="small">＋追加</button>
         <button id="m-import" class="small">CSV読込</button>

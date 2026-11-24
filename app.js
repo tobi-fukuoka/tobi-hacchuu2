@@ -1,6 +1,6 @@
 /* 東美発注 v1 — iPadオフライン発注アプリ */
 'use strict';
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const DB_NAME = 'tobi-hacchu2';
 const DEPTS = ['画材', '額縁・木枠・キャンバス・金具'];
 const ROWS_PER_SHEET = 30;
@@ -242,6 +242,7 @@ function filterOrderList() {
   const q = $('#q').value.trim();
   const all = $('#q-all').checked;
   const onlyCart = $('#q-cart').checked;
+  const onlyHandled = $('#q-handled').checked;
   let pool;
   if (onlyCart) {
     const c = cartOf(S.supplier); pool = [...c.keys()].map(id => S.byId.get(id)).filter(Boolean);
@@ -251,7 +252,10 @@ function filterOrderList() {
     pool = S.bySup.get(S.supplier) || [];
   }
   let list = q ? searchProducts(pool, q) : pool;
-  // 発注中の商品を上に
+  if (onlyHandled) list = list.filter(p => p.handled);
+  // 取扱中の商品を上に
+  if (!onlyHandled) { const h = list.filter(p => p.handled); if (h.length && h.length < list.length) list = h.concat(list.filter(p => !p.handled)); }
+  // 発注中の商品をさらに上に
   if (!onlyCart && !q) {
     const c = cartOf(S.supplier);
     if (c.size) { const top = list.filter(p => c.get(p.id)?.qty); const rest = list.filter(p => !c.get(p.id)?.qty); list = top.concat(rest); }
@@ -265,7 +269,7 @@ function lotLabel(p) { return p.lot > 1 ? `<span class="badge b-lot">${p.lot}${e
 function rowHTML(p) {
   const it = cartOf(p.supplier).get(p.id) || { qty: 0, note: '' };
   const showSup = p.supplier !== S.supplier;
-  const warn = p.check ? `<span class="badge b-warn" title="${esc(p.check)}">要確認</span>` : '';
+  const warn = (p.handled ? '<span class="badge b-ok">取扱中</span>' : '') + (p.check ? `<span class="badge b-warn" title="${esc(p.check)}">要確認</span>` : '');
   const lotWarn = it.qty && p.lot > 1 && it.qty % p.lot ? `<div class="lotwarn">※${p.lot}${esc(p.unit || '個')}単位の商品です（${it.qty}は端数です）</div>` : '';
   return `<div class="row ${it.qty ? 'has' : ''}" data-id="${p.id}">
     <div class="code">${esc(p.code)}</div>
@@ -549,7 +553,7 @@ function supplierOptions(sel) {
 }
 function openProductForm(p, fromOrder) {
   const isNew = p.id == null;
-  p = { dept: '', supplier: S.supplier, maker: '', jan: '', code: '', name: '', unit: '個', lot: null, jodai: null, gedai: null, rate: null, status: '', check: '', manual: true, ...p };
+  p = { dept: '', supplier: S.supplier, maker: '', jan: '', code: '', name: '', unit: '個', lot: null, jodai: null, gedai: null, rate: null, status: '', check: '', manual: true, handled: true, ...p };
   modal(`<h3>${isNew ? '商品を登録' : '商品を編集'}</h3>
     <div class="grid2">
       <div class="field"><label>仕入先</label><select id="pf-sup">${supplierOptions(p.supplier)}</select></div>
@@ -562,6 +566,7 @@ function openProductForm(p, fromOrder) {
       <div class="field"><label>取り寄せ単位（空欄＝1個から）</label><input id="pf-lot" inputmode="numeric" value="${p.lot ?? ''}"></div>
       <div class="field"><label>この商品の掛率（空欄＝仕入先の掛率）</label><input id="pf-rate" inputmode="decimal" value="${p.rate ?? ''}" placeholder="${esc(String(rateOf({ ...p, rate: null }) ?? '未設定'))}"></div>
       <div class="field" style="grid-column:1/-1"><label>状態・メモ</label><input id="pf-status" value="${esc(p.status)}"></div>
+      <label class="chk" style="grid-column:1/-1;font-size:14px"><input type="checkbox" id="pf-handled" ${p.handled ? 'checked' : ''}> 取扱中（店で扱っている商品。発注画面で上に表示されます）</label>
     </div>
     ${p.check ? `<div class="err" style="margin-top:8px">要確認：${esc(p.check)} <button class="small" id="pf-clearcheck">確認済みにする</button></div>` : ''}
     <div id="pf-err" class="err"></div>
@@ -579,7 +584,7 @@ function openProductForm(p, fromOrder) {
       np.jodai = toNum($('#pf-jodai', el).value); np.unit = $('#pf-unit', el).value.trim() || '個';
       const lot = toNum($('#pf-lot', el).value); np.lot = lot > 1 ? Math.round(lot) : null;
       const r = toNum($('#pf-rate', el).value); np.rate = r != null && r > 0 && r < 1.5 ? r : null;
-      np.status = $('#pf-status', el).value.trim();
+      np.status = $('#pf-status', el).value.trim(); np.handled = $('#pf-handled', el).checked;
       np.dept = S.supMap.get(np.supplier)?.dept || np.dept || S.dept;
       if (!np.name) { $('#pf-err', el).textContent = '商品名を入れてください'; return; }
       if (np.jan && (S.byJan.get(np.jan) || []).some(x => x.id !== np.id)) {
@@ -620,9 +625,10 @@ function renderMasterSupSel() {
   $('#m-sup').innerHTML = `<option value="">全仕入先（${S.products.length.toLocaleString()}件）</option>` + S.suppliers.map(s => `<option value="${esc(s.name)}" ${s.name === cur ? 'selected' : ''}>${esc(s.name)}（${(S.bySup.get(s.name) || []).length.toLocaleString()}）</option>`).join('');
 }
 function filterMaster() {
-  const sup = $('#m-sup').value; const q = $('#m-q').value.trim(); const onlyCheck = $('#m-check').checked;
+  const sup = $('#m-sup').value; const q = $('#m-q').value.trim(); const onlyCheck = $('#m-check').checked; const onlyH = $('#m-handled').checked;
   let pool = sup ? (S.bySup.get(sup) || []) : S.products;
   if (onlyCheck) pool = pool.filter(p => p.check);
+  if (onlyH) pool = pool.filter(p => p.handled);
   S.mFiltered = q ? searchProducts(pool, q) : pool; S.mShown = 0;
   $('#mtable').innerHTML = `<tr><th>仕入先</th><th>品番</th><th>商品名</th><th>JAN</th><th class="num">上代</th><th>単位</th><th class="num">取寄単位</th><th class="num">掛率</th></tr>`;
   $('#mlist-wrap').scrollTop = 0;
@@ -630,7 +636,7 @@ function filterMaster() {
 }
 function appendMasterRows() {
   const slice = S.mFiltered.slice(S.mShown, S.mShown + PAGE_SIZE);
-  $('#mtable').insertAdjacentHTML('beforeend', slice.map(p => `<tr data-id="${p.id}"><td>${esc(p.supplier)}</td><td>${esc(p.code)}</td><td>${esc(p.name)}${p.check ? ' <span class="badge b-warn">要確認</span>' : ''}${p.manual ? ' <span class="badge b-sup">手入力</span>' : ''}</td><td>${esc(p.jan)}</td><td class="num">${yen(p.jodai)}</td><td>${esc(p.unit)}</td><td class="num">${p.lot || ''}</td><td class="num">${p.rate ?? ''}</td></tr>`).join(''));
+  $('#mtable').insertAdjacentHTML('beforeend', slice.map(p => `<tr data-id="${p.id}"><td>${esc(p.supplier)}</td><td>${esc(p.code)}</td><td>${esc(p.name)}${p.handled ? ' <span class="badge b-ok">取扱中</span>' : ''}${p.check ? ' <span class="badge b-warn">要確認</span>' : ''}${p.manual ? ' <span class="badge b-sup">手入力</span>' : ''}</td><td>${esc(p.jan)}</td><td class="num">${yen(p.jodai)}</td><td>${esc(p.unit)}</td><td class="num">${p.lot || ''}</td><td class="num">${p.rate ?? ''}</td></tr>`).join(''));
   S.mShown += slice.length;
   $('#mmore').textContent = S.mFiltered.length ? (S.mShown < S.mFiltered.length ? `${S.mShown} / ${S.mFiltered.length} 件表示中（下にスクロールで続き）` : `${S.mFiltered.length} 件`) : '該当なし';
 }
@@ -655,8 +661,8 @@ async function readFileText(file) {
   if (t.includes('�')) { try { t = new TextDecoder('shift_jis').decode(buf); } catch (e) { } }
   return t.replace(/^﻿/, '');
 }
-const CSV_COLS = [['部門', 'dept'], ['仕入先', 'supplier'], ['メーカー', 'maker'], ['JAN', 'jan'], ['品番', 'code'], ['商品名', 'name'], ['単位', 'unit'], ['取り寄せ単位', 'lot'], ['上代', 'jodai'], ['下代', 'gedai'], ['掛率', 'rate'], ['状態', 'status'], ['要確認', 'check']];
-function csvCell(v) { v = String(v ?? ''); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+const CSV_COLS = [['部門', 'dept'], ['仕入先', 'supplier'], ['メーカー', 'maker'], ['JAN', 'jan'], ['品番', 'code'], ['商品名', 'name'], ['単位', 'unit'], ['取り寄せ単位', 'lot'], ['上代', 'jodai'], ['下代', 'gedai'], ['掛率', 'rate'], ['状態', 'status'], ['要確認', 'check'], ['取扱中', 'handled']];
+function csvCell(v) { if (v === true) v = '○'; if (v === false) v = ''; v = String(v ?? ''); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
 function exportCSV() {
   const sup = $('#m-sup').value;
   const list = sup ? (S.bySup.get(sup) || []) : S.products;
@@ -718,6 +724,7 @@ async function mergeRows(rows, idx, fixedSup) {
     np.name = name; if (jan) np.jan = jan; if (code) np.code = code;
     const set = (k, f) => { const v = g(r, k); if (v !== undefined && v !== '') np[k] = f ? f(v) : v; };
     set('maker'); set('unit', v => (v === 'ケ' || v === 'ヶ') ? '個' : v); set('status'); set('check');
+    set('handled', v => !/^(×|x|0|false|いいえ|no|-)$/i.test(v.trim()));
     set('jodai', toNum); set('gedai', toNum); set('rate', toNum); set('lot', v => { const n = toNum(v); return n > 1 ? Math.round(n) : null; });
     np.updatedAt = Date.now();
   }
@@ -882,7 +889,7 @@ function bindUI() {
   $('#q').addEventListener('keydown', e => {
     if (e.key === 'Enter') { const v = $('#q').value.trim(); if (/^\d{8,14}$/.test(v)) { e.preventDefault(); $('#q').value = ''; handleScan(v, false); filterOrderList(); } }
   });
-  $('#q-all').onchange = filterOrderList; $('#q-cart').onchange = filterOrderList;
+  $('#q-all').onchange = filterOrderList; $('#q-cart').onchange = filterOrderList; $('#q-handled').onchange = filterOrderList;
   $('#btn-scan').onclick = openScanner;
   $('#btn-newprod').onclick = () => openProductForm({ supplier: S.supplier }, true);
   const ow = $('#olist-wrap');
@@ -926,7 +933,7 @@ function bindUI() {
     if (b.dataset.a === 'del') { if (await confirmBox(`${o.no} の履歴を削除しますか？`, '削除')) { await del('orders', o.id); S.orders = S.orders.filter(x => x !== o); renderHistory(); } }
   };
   // マスタ
-  $('#m-sup').onchange = filterMaster; $('#m-check').onchange = filterMaster;
+  $('#m-sup').onchange = filterMaster; $('#m-check').onchange = filterMaster; $('#m-handled').onchange = filterMaster;
   $('#m-q').addEventListener('input', debounce(filterMaster, 200));
   const mw = $('#mlist-wrap');
   mw.addEventListener('scroll', () => { if (mw.scrollTop + mw.clientHeight > mw.scrollHeight - 400 && S.mShown < S.mFiltered.length) appendMasterRows(); });
