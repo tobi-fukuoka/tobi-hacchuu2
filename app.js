@@ -1,6 +1,6 @@
 /* 東美発注 v1 — iPadオフライン発注アプリ */
 'use strict';
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const DB_NAME = 'tobi-hacchu2';
 const DEPTS = ['画材', '額縁・木枠・キャンバス・金具'];
 const ROWS_PER_SHEET = 30;
@@ -149,6 +149,7 @@ async function boot() {
   selectSupplier(await kvGet('lastSup:' + S.dept, null));
   renderStaffSelect();
   $('#loading').style.display = 'none';
+  setTimeout(() => checkBackupReminder().catch(() => { }), 800);
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
 }
 async function seedData() {
@@ -660,7 +661,7 @@ function exportCSV() {
   const sup = $('#m-sup').value;
   const list = sup ? (S.bySup.get(sup) || []) : S.products;
   const lines = [CSV_COLS.map(c => c[0]).join(',')].concat(list.map(p => CSV_COLS.map(([, k]) => csvCell(p[k])).join(',')));
-  downloadText(`商品マスタ_${sup || '全仕入先'}_${today()}.csv`, '﻿' + lines.join('\r\n'), 'text/csv');
+  shareOrDownload(new File(['\uFEFF' + lines.join('\r\n')], `商品マスタ_${sup || '全仕入先'}_${today()}.csv`, { type: 'text/csv' })).then(ok => { if (ok === null) toast('もう一度「CSV出力」を押してください'); }).catch(e => toast('出力できませんでした：' + e.message));
 }
 function downloadText(name, text, type) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
@@ -761,12 +762,12 @@ function renderSettings() {
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><select id="s-br-sup">${supplierOptions('丸善')}</select><input id="s-br-maker" placeholder="メーカー名（マスタのメーカー名と同じ）"><input id="s-br-rate" placeholder="掛率 0.6" inputmode="decimal" style="width:90px"><button id="s-br-add">追加</button></div>
     <div class="chk" style="margin-top:6px">下代の目安は「商品ごとの掛率 → ブランド別の掛率 → 仕入先の基本掛率」の順に使います。</div></div>
   <div class="card"><h3>バックアップ</h3>
-    <div class="chk" style="margin-bottom:8px">データはこのiPadの中だけに保存されています。月に1回くらい、バックアップをファイルに保存しておくと安心です。</div>
+    <div class="chk" style="margin-bottom:8px">データはこのiPadの中だけに保存されています。月に1回くらい、バックアップをファイルに保存しておくと安心です。前回から30日たつと、アプリを開いたときにお知らせします。</div>
     <button id="s-backup">バックアップを保存</button> <button id="s-restore">バックアップから戻す</button><input type="file" id="s-restore-file" accept=".json,application/json" hidden>
     <div class="chk" style="margin-top:6px" id="s-info"></div></div>
   <div class="card"><h3>初期化</h3><button class="danger" id="s-reset">すべてのデータを消して最初からやり直す</button>
     <div class="chk" style="margin-top:6px">アプリ ${APP_VERSION}</div></div>`;
-  kvGet('masterVersion', '').then(v => { $('#s-info').textContent = `商品 ${S.products.length.toLocaleString()}件・発注履歴 ${S.orders.length}件・初期マスタ ${v}`; });
+  Promise.all([kvGet('masterVersion', ''), kvGet('lastBackup', null)]).then(([v, lb]) => { $('#s-info').textContent = `前回のバックアップ：${lb ? lb.slice(0, 10) : 'まだありません'}　／　商品 ${S.products.length.toLocaleString()}件・発注履歴 ${S.orders.length}件・初期マスタ ${v}`; });
 }
 function openSupplierForm(s) {
   const isNew = !s;
@@ -797,11 +798,55 @@ function openSupplierForm(s) {
     };
   });
 }
-async function backup() {
+const BACKUP_DAYS = 30;
+async function buildBackupFile() {
   const data = { app: 'tobi-hacchu', version: APP_VERSION, at: new Date().toISOString() };
   for (const s of ['products', 'suppliers', 'kv', 'carts', 'orders']) data[s] = await getAll(s);
-  downloadText(`東美発注_バックアップ_${today()}.json`, JSON.stringify(data), 'application/json');
-  await kvSet('lastBackup', new Date().toISOString());
+  return new File([JSON.stringify(data)], `東美発注_バックアップ_${today()}.json`, { type: 'application/json' });
+}
+// iPadでは共有画面（「ファイルに保存」など）、それ以外はダウンロード。成功したら true
+async function shareOrDownload(file) {
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: file.name }); return true; }
+    catch (e) { if (e.name === 'AbortError') return false; if (e.name !== 'NotAllowedError') throw e; return null; }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  return true;
+}
+async function backupFlow(fromReminder) {
+  modal('<h3>バックアップ</h3><div>バックアップを作っています…</div>');
+  let file;
+  try { file = await buildBackupFile(); } catch (e) { modal(`<h3>バックアップ</h3><div class="err">作成できませんでした：${esc(e.message || e)}</div><div class="acts"><button data-x="0">閉じる</button></div>`, el => $('[data-x="0"]', el).onclick = closeModal); return; }
+  const mb = (file.size / 1024 / 1024).toFixed(1);
+  modal(`<h3>バックアップ</h3>
+    <div>バックアップファイルができました（${mb}MB）。</div>
+    <div style="margin-top:8px;font-size:14px;color:#5c6470">「保存する」を押すと共有画面が開きます。「<b>ファイルに保存</b>」を選んで、iCloud Drive などに保存してください。</div>
+    <div class="acts"><button data-x="0">${fromReminder ? 'あとで' : 'キャンセル'}</button><button class="primary" data-x="1">保存する</button></div>`, el => {
+    $('[data-x="0"]', el).onclick = () => { closeModal(); if (fromReminder) snoozeBackup(); };
+    $('[data-x="1"]', el).onclick = async () => {
+      const ok = await shareOrDownload(file);
+      if (ok) { await kvSet('lastBackup', new Date().toISOString()); await kvSet('backupSnooze', null); closeModal(); toast('バックアップを保存しました'); if (S.page === 'settings') renderSettings(); }
+      else if (ok === null) toast('もう一度「保存する」を押してください');
+    };
+  });
+}
+async function snoozeBackup() { await kvSet('backupSnooze', new Date(Date.now() + 3 * 86400000).toISOString()); toast('3日後にもう一度お知らせします'); }
+async function checkBackupReminder() {
+  const last = await kvGet('lastBackup', null);
+  const base = last || await kvGet('seeded', null);
+  if (!base) return;
+  const snooze = await kvGet('backupSnooze', null);
+  if (snooze && new Date(snooze) > new Date()) return;
+  const days = Math.floor((Date.now() - new Date(base)) / 86400000);
+  if (days < BACKUP_DAYS) return;
+  modal(`<h3>バックアップのお知らせ</h3>
+    <div>${last ? `前回のバックアップから <b>${days}日</b> たちました。` : `使い始めてから <b>${days}日</b> たちましたが、まだバックアップがありません。`}</div>
+    <div style="margin-top:8px;font-size:14px;color:#5c6470">データはこのiPadの中だけに保存されています。故障や削除に備えて、ファイルに保存しておきましょう。</div>
+    <div class="acts"><button data-x="0">あとで（3日後）</button><button class="primary" data-x="1">今すぐバックアップ</button></div>`, el => {
+    $('[data-x="0"]', el).onclick = () => { closeModal(); snoozeBackup(); };
+    $('[data-x="1"]', el).onclick = () => backupFlow(true);
+  });
 }
 async function restore(file) {
   let data; try { data = JSON.parse(await readFileText(file)); } catch (e) { toast('ファイルを読めませんでした'); return; }
@@ -907,7 +952,7 @@ function bindUI() {
     if (t.id === 's-sup-add') openSupplierForm(null);
     if (t.dataset.br != null) { S.brandRates.splice(+t.dataset.br, 1); await kvSet('brandRates', S.brandRates); renderSettings(); }
     if (t.id === 's-br-add') { const r = toNum($('#s-br-rate').value); const mk = $('#s-br-maker').value.trim(); if (!mk || !r) { toast('メーカー名と掛率を入れてください'); return; } S.brandRates.push({ supplier: $('#s-br-sup').value, maker: mk, rate: r }); await kvSet('brandRates', S.brandRates); renderSettings(); }
-    if (t.id === 's-backup') backup();
+    if (t.id === 's-backup') backupFlow(false);
     if (t.id === 's-restore') $('#s-restore-file').click();
     if (t.id === 's-reset') { if (await confirmBox('商品マスタ・発注履歴・設定をすべて消して、最初の状態に戻します。元に戻せません。よろしいですか？', 'すべて消す')) { db.close(); indexedDB.deleteDatabase(DB_NAME); setTimeout(() => location.reload(), 500); } }
   });
